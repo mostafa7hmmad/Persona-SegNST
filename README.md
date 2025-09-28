@@ -1,4 +1,5 @@
 # Project Pipeline — Segmentation + Neural Style Transfer
+![img](styled_image(6).png)
 
 ## Folder Structure
 ```
