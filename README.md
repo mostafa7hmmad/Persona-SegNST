@@ -1,7 +1,7 @@
 # Project Pipeline — Segmentation + Neural Style Transfer
 
 ## Folder Structure
-
+```
 project/
 │── main.py            # Main entry point
 │── runner.py          # Auto-run script
