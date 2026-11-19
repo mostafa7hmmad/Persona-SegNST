@@ -1,9 +1,9 @@
 
 streamlit
-numpy<2
+numpy==1.26.4
 pillow
 opencv-python-headless==4.10.0.84
-torch
-torchvision
-tensorflow
+torch==2.5.1
+torchvision==0.20.1
+tensorflow==2.16.2
 segmentation-models==1.0.1
