@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import html as html_lib
 import io
 import os
@@ -343,20 +344,17 @@ def b64_jpeg(img_rgb: np.ndarray) -> str:
 
 def safe_st_image(img_rgb: np.ndarray, alt_text: str = "Rendered canvas"):
     """
-    Renders via st.image with width='stretch', and falls back to an inline
-    data-URI <img> tag if Streamlit's ASGI media endpoint fails.
+    Renders images inline via a JPEG data URI so browser rendering never
+    breaks on Streamlit's ASGI /_stcore/media HTTP response pipeline.
     """
-    try:
-        st.image(img_rgb, width="stretch")
-    except Exception:
-        encoded = b64_jpeg(img_rgb)
-        safe_alt = html_lib.escape(alt_text, quote=True)
-        st.markdown(
-            f'<img src="data:image/jpeg;base64,{encoded}" alt="{safe_alt}" '
-            f'style="width:100%;height:auto;display:block;border-radius:14px;'
-            f'border:1px solid rgba(148,163,184,0.16);box-shadow:0 12px 32px rgba(0,0,0,0.38);" />',
-            unsafe_allow_html=True,
-        )
+    encoded = b64_jpeg(img_rgb)
+    safe_alt = html_lib.escape(alt_text, quote=True)
+    st.markdown(
+        f'<img src="data:image/jpeg;base64,{encoded}" alt="{safe_alt}" '
+        f'style="width:100%;height:auto;display:block;border-radius:14px;'
+        f'border:1px solid rgba(148,163,184,0.16);box-shadow:0 12px 32px rgba(0,0,0,0.38);" />',
+        unsafe_allow_html=True,
+    )
 
 
 # ===============================
@@ -759,8 +757,8 @@ def inject_studio_css():
 
 def render_split_compare(orig_rgb: np.ndarray, res_rgb: np.ndarray, mode_label: str, style_label: str):
     h, w = orig_rgb.shape[:2]
-    orig_b64 = b64_png(orig_rgb)
-    res_b64 = b64_png(res_rgb)
+    orig_b64 = b64_jpeg(orig_rgb)
+    res_b64 = b64_jpeg(res_rgb)
     safe_mode = html_lib.escape(mode_label)
     safe_style = html_lib.escape(style_label)
 
@@ -971,8 +969,8 @@ def render_split_compare(orig_rgb: np.ndarray, res_rgb: np.ndarray, mode_label: 
     <body>
       <div class="shell">
         <div class="stage" id="stage">
-          <img src="data:image/png;base64,{orig_b64}" alt="Original input image" />
-          <img class="layer-result" src="data:image/png;base64,{res_b64}" alt="Processed result image" />
+          <img src="data:image/jpeg;base64,{orig_b64}" alt="Original input image" />
+          <img class="layer-result" src="data:image/jpeg;base64,{res_b64}" alt="Processed result image" />
           <div class="divider"></div>
           <div class="handle" aria-hidden="true">&#8596;</div>
           <span class="pill pill-left">Original</span>
@@ -1199,7 +1197,8 @@ def main():
     # -------------------------------
     # Decode & Execute Dual-Branch Pipeline
     # -------------------------------
-    file_bytes = np.frombuffer(uploaded_file.getvalue(), np.uint8)
+    raw_bytes = uploaded_file.getvalue()
+    file_bytes = np.frombuffer(raw_bytes, np.uint8)
     raw_bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
     if raw_bgr is None:
         st.error("Unable to decode the uploaded image. Please upload a valid JPG or PNG file.")
@@ -1324,19 +1323,50 @@ def main():
             st.info("Switch Compositing Mode to StyleOnMask, StyleOnBG, or Style to generate a 4-style contact sheet.")
         else:
             st.caption(f"Render all four pretrained neural styles simultaneously under **{MODE_CATALOG[mode]['label']}**.")
+            img_digest = hashlib.sha256(raw_bytes).hexdigest()[:16]
+            sheet_key = (
+                f"{img_digest}|{w}x{h}|{mode}|{style_strength:.2f}|{bg_hex}|"
+                f"{threshold:.2f}|{feather_px}|{int(soft_matte)}"
+            )
             if st.button("Generate 4-Style Contact Sheet", width="content"):
+                sheet_items = []
+                with st.spinner("Rendering all 4 neural styles..."):
+                    for s_name, s_model in loaded_styles.items():
+                        s_bgr, s_ms = stylize_frame(frame_bgr, s_model, device)
+                        comp_bgr = composite_output(frame_bgr, s_bgr, alpha_3ch, mode, style_strength, bg_hex)
+                        comp_rgb = cv2.cvtColor(comp_bgr, cv2.COLOR_BGR2RGB)
+                        sheet_items.append(
+                            {
+                                "name": s_name,
+                                "tag": STYLE_CATALOG[s_name]["tag"],
+                                "ms": s_ms,
+                                "b64": b64_jpeg(comp_rgb),
+                            }
+                        )
+                st.session_state["contact_sheet_cache"] = {
+                    "key": sheet_key,
+                    "items": sheet_items,
+                }
+
+            cached_sheet = st.session_state.get("contact_sheet_cache")
+            if cached_sheet and cached_sheet.get("key") == sheet_key:
                 cols = st.columns(2, gap="medium")
-                for idx, (s_name, s_model) in enumerate(loaded_styles.items()):
-                    s_bgr, s_ms = stylize_frame(frame_bgr, s_model, device)
-                    comp_bgr = composite_output(frame_bgr, s_bgr, alpha_3ch, mode, style_strength, bg_hex)
-                    comp_rgb = cv2.cvtColor(comp_bgr, cv2.COLOR_BGR2RGB)
+                for idx, item in enumerate(cached_sheet["items"]):
+                    safe_name = html_lib.escape(item["name"].upper())
+                    safe_tag = html_lib.escape(item["tag"])
                     with cols[idx % 2]:
                         st.markdown(
-                            f'<div class="canvas-card-header"><span>{s_name.upper()} · {STYLE_CATALOG[s_name]["tag"]}</span>'
-                            f'<span class="canvas-badge">{s_ms:.0f} ms</span></div>',
+                            f'<div class="canvas-card-header"><span>{safe_name} · {safe_tag}</span>'
+                            f'<span class="canvas-badge">{item["ms"]:.0f} ms</span></div>',
                             unsafe_allow_html=True,
                         )
-                        safe_st_image(comp_rgb, f"{s_name} stylized output")
+                        st.markdown(
+                            f'<img src="data:image/jpeg;base64,{item["b64"]}" '
+                            f'alt="{safe_name} stylized output" '
+                            f'style="width:100%;height:auto;display:block;border-radius:14px;'
+                            f'border:1px solid rgba(148,163,184,0.16);box-shadow:0 12px 32px rgba(0,0,0,0.38);" />',
+                            unsafe_allow_html=True,
+                        )
 
     # -------------------------------
     # Export Bar
