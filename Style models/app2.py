@@ -334,12 +334,16 @@ def encode_image_bytes(img_rgb: np.ndarray, fmt: str = "PNG", alpha_1ch: np.ndar
     return buf.getvalue()
 
 
+def b64_from_bytes(data: bytes) -> str:
+    return base64.b64encode(data).decode("ascii")
+
+
 def b64_png(img_rgb: np.ndarray) -> str:
-    return base64.b64encode(encode_image_bytes(img_rgb, "PNG")).decode("ascii")
+    return b64_from_bytes(encode_image_bytes(img_rgb, "PNG"))
 
 
 def b64_jpeg(img_rgb: np.ndarray) -> str:
-    return base64.b64encode(encode_image_bytes(img_rgb, "JPEG")).decode("ascii")
+    return b64_from_bytes(encode_image_bytes(img_rgb, "JPEG"))
 
 
 def safe_st_image(img_rgb: np.ndarray, alt_text: str = "Rendered canvas"):
@@ -353,6 +357,22 @@ def safe_st_image(img_rgb: np.ndarray, alt_text: str = "Rendered canvas"):
         f'<img src="data:image/jpeg;base64,{encoded}" alt="{safe_alt}" '
         f'style="width:100%;height:auto;display:block;border-radius:14px;'
         f'border:1px solid rgba(148,163,184,0.16);box-shadow:0 12px 32px rgba(0,0,0,0.38);" />',
+        unsafe_allow_html=True,
+    )
+
+
+def render_direct_download_link(label: str, raw_bytes: bytes, mime_type: str, filename: str):
+    """
+    Renders a client-side data-URI download button so file downloads bypass
+    Streamlit's ASGI media/file endpoints when ASGI responses fail.
+    """
+    encoded = b64_from_bytes(raw_bytes)
+    safe_label = html_lib.escape(label)
+    safe_mime = html_lib.escape(mime_type, quote=True)
+    safe_name = html_lib.escape(filename, quote=True)
+    st.markdown(
+        f'<a href="data:{safe_mime};base64,{encoded}" download="{safe_name}" '
+        f'class="studio-dl-btn">{safe_label}</a>',
         unsafe_allow_html=True,
     )
 
@@ -705,22 +725,29 @@ def inject_studio_css():
             border: 1px solid rgba(124, 92, 255, 0.45);
         }
 
-        /* Buttons */
-        .stDownloadButton > button, .stButton > button {
+        /* Buttons & Direct Download Links */
+        .stButton > button, .studio-dl-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            text-decoration: none !important;
             background: linear-gradient(135deg, #6d4aff 0%, #4f46e5 100%);
-            color: #ffffff;
+            color: #ffffff !important;
             border: 1px solid rgba(196, 181, 253, 0.35);
             border-radius: 10px;
             font-weight: 600;
-            padding: 0.52rem 1rem;
+            font-size: 0.88rem;
+            padding: 0.56rem 1rem;
+            cursor: pointer;
             transition: transform 140ms ease, box-shadow 140ms ease, filter 140ms ease;
         }
 
-        .stDownloadButton > button:hover, .stButton > button:hover {
+        .stButton > button:hover, .studio-dl-btn:hover {
             transform: translateY(-1px);
             box-shadow: 0 8px 22px rgba(124, 92, 255, 0.35);
             filter: brightness(1.08);
-            color: #ffffff;
+            color: #ffffff !important;
         }
 
         /* Image Frame Containers */
@@ -1375,28 +1402,25 @@ def main():
     ex1, ex2, ex3 = st.columns(3, gap="medium")
     base_name = os.path.splitext(uploaded_file.name)[0]
     with ex1:
-        st.download_button(
+        render_direct_download_link(
             label="Download Result (PNG)",
-            data=encode_image_bytes(result_rgb, "PNG"),
-            file_name=f"{base_name}_{mode}_{style_choice}.png",
-            mime="image/png",
-            width="stretch",
+            raw_bytes=encode_image_bytes(result_rgb, "PNG"),
+            mime_type="image/png",
+            filename=f"{base_name}_{mode}_{style_choice}.png",
         )
     with ex2:
-        st.download_button(
+        render_direct_download_link(
             label="Download Result (JPEG)",
-            data=encode_image_bytes(result_rgb, "JPEG"),
-            file_name=f"{base_name}_{mode}_{style_choice}.jpg",
-            mime="image/jpeg",
-            width="stretch",
+            raw_bytes=encode_image_bytes(result_rgb, "JPEG"),
+            mime_type="image/jpeg",
+            filename=f"{base_name}_{mode}_{style_choice}.jpg",
         )
     with ex3:
-        st.download_button(
+        render_direct_download_link(
             label="Download Transparent Cutout (RGBA PNG)",
-            data=encode_image_bytes(orig_rgb, "RGBA_PNG", alpha_1ch=alpha_3ch[:, :, 0]),
-            file_name=f"{base_name}_cutout_rgba.png",
-            mime="image/png",
-            width="stretch",
+            raw_bytes=encode_image_bytes(orig_rgb, "RGBA_PNG", alpha_1ch=alpha_3ch[:, :, 0]),
+            mime_type="image/png",
+            filename=f"{base_name}_cutout_rgba.png",
         )
 
 
