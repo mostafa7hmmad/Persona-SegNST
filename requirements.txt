@@ -1,0 +1,9 @@
+
+streamlit
+numpy<2
+pillow
+opencv-python-headless==4.10.0.84
+torch
+torchvision
+tensorflow
+segmentation-models==1.0.1
