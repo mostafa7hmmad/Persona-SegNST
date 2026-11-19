@@ -1,4 +1,5 @@
 import base64
+import html as html_lib
 import io
 import os
 import time
@@ -7,7 +8,6 @@ import types
 import cv2
 import numpy as np
 import streamlit as st
-import streamlit.components.v1 as components
 import tensorflow as tf
 import torch
 import torch.nn as nn
@@ -255,7 +255,6 @@ def build_alpha_matte(
     soft_matte: bool,
 ) -> np.ndarray:
     if soft_matte:
-        # Smooth sigmoid-like ramp centered on threshold for natural edge transitions
         alpha_1ch = np.clip((prob_map - (threshold - 0.15)) / 0.30, 0.0, 1.0).astype(np.float32)
     else:
         alpha_1ch = (prob_map > threshold).astype(np.float32)
@@ -328,14 +327,36 @@ def encode_image_bytes(img_rgb: np.ndarray, fmt: str = "PNG", alpha_1ch: np.ndar
         rgba = np.dstack([img_rgb, alpha_u8])
         Image.fromarray(rgba, mode="RGBA").save(buf, format="PNG")
     elif fmt == "JPEG":
-        Image.fromarray(img_rgb, mode="RGB").save(buf, format="JPEG", quality=95)
+        Image.fromarray(img_rgb, mode="RGB").save(buf, format="JPEG", quality=92, optimize=True)
     else:
-        Image.fromarray(img_rgb, mode="RGB").save(buf, format="PNG")
+        Image.fromarray(img_rgb, mode="RGB").save(buf, format="PNG", optimize=True)
     return buf.getvalue()
 
 
 def b64_png(img_rgb: np.ndarray) -> str:
     return base64.b64encode(encode_image_bytes(img_rgb, "PNG")).decode("ascii")
+
+
+def b64_jpeg(img_rgb: np.ndarray) -> str:
+    return base64.b64encode(encode_image_bytes(img_rgb, "JPEG")).decode("ascii")
+
+
+def safe_st_image(img_rgb: np.ndarray, alt_text: str = "Rendered canvas"):
+    """
+    Renders via st.image with width='stretch', and falls back to an inline
+    data-URI <img> tag if Streamlit's ASGI media endpoint fails.
+    """
+    try:
+        st.image(img_rgb, width="stretch")
+    except Exception:
+        encoded = b64_jpeg(img_rgb)
+        safe_alt = html_lib.escape(alt_text, quote=True)
+        st.markdown(
+            f'<img src="data:image/jpeg;base64,{encoded}" alt="{safe_alt}" '
+            f'style="width:100%;height:auto;display:block;border-radius:14px;'
+            f'border:1px solid rgba(148,163,184,0.16);box-shadow:0 12px 32px rgba(0,0,0,0.38);" />',
+            unsafe_allow_html=True,
+        )
 
 
 # ===============================
@@ -358,7 +379,6 @@ def inject_studio_css():
             --studio-accent: #7c5cff;
             --studio-accent-2: #22d3ee;
             --studio-radius: 14px;
-            color-scheme: only dark;
             accent-color: var(--studio-accent);
         }
 
@@ -375,7 +395,6 @@ def inject_studio_css():
                 radial-gradient(720px 380px at 88% 0%, rgba(34, 211, 238, 0.12), transparent 58%);
             color: var(--studio-text);
             accent-color: var(--studio-accent);
-            color-scheme: only dark;
             scrollbar-color: #64748b #0f1422;
             scrollbar-width: auto;
         }
@@ -401,7 +420,6 @@ def inject_studio_css():
             background-color: #0d111c;
             border-right: 1px solid var(--studio-border);
             color: var(--studio-text);
-            color-scheme: only dark;
             accent-color: var(--studio-accent);
         }
 
@@ -743,8 +761,9 @@ def render_split_compare(orig_rgb: np.ndarray, res_rgb: np.ndarray, mode_label: 
     h, w = orig_rgb.shape[:2]
     orig_b64 = b64_png(orig_rgb)
     res_b64 = b64_png(res_rgb)
+    safe_mode = html_lib.escape(mode_label)
+    safe_style = html_lib.escape(style_label)
 
-    aspect_pct = max(48, min(115, int(round((h / float(w)) * 100))))
     iframe_height = max(470, min(680, int(round(560 * (h / float(w)))) + 105))
 
     html = f"""
@@ -761,7 +780,6 @@ def render_split_compare(orig_rgb: np.ndarray, res_rgb: np.ndarray, mode_label: 
           --muted: #94a3b8;
           --accent: #7c5cff;
           --cyan: #22d3ee;
-          color-scheme: only dark;
           accent-color: var(--accent);
         }}
         * {{ box-sizing: border-box; }}
@@ -771,7 +789,6 @@ def render_split_compare(orig_rgb: np.ndarray, res_rgb: np.ndarray, mode_label: 
           background: #080a10;
           color: var(--text);
           font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
-          color-scheme: only dark;
           accent-color: var(--accent);
         }}
         .shell {{
@@ -910,7 +927,6 @@ def render_split_compare(orig_rgb: np.ndarray, res_rgb: np.ndarray, mode_label: 
           outline-offset: 4px;
           border-radius: 6px;
         }}
-        /* WebKit / Blink */
         input[type="range"]::-webkit-slider-runnable-track {{
           block-size: var(--slider-track-size);
           border: 0;
@@ -932,7 +948,6 @@ def render_split_compare(orig_rgb: np.ndarray, res_rgb: np.ndarray, mode_label: 
           background: var(--slider-thumb-color);
           box-shadow: 0 0 10px rgba(34, 211, 238, 0.65);
         }}
-        /* Firefox */
         input[type="range"]::-moz-range-track {{
           block-size: var(--slider-track-size);
           border: 0;
@@ -961,7 +976,7 @@ def render_split_compare(orig_rgb: np.ndarray, res_rgb: np.ndarray, mode_label: 
           <div class="divider"></div>
           <div class="handle" aria-hidden="true">&#8596;</div>
           <span class="pill pill-left">Original</span>
-          <span class="pill pill-right">{mode_label} &middot; {style_label}</span>
+          <span class="pill pill-right">{safe_mode} &middot; {safe_style}</span>
         </div>
         <div class="controls">
           <label for="compare-slider">Split Wipe</label>
@@ -997,6 +1012,14 @@ def render_split_compare(orig_rgb: np.ndarray, res_rgb: np.ndarray, mode_label: 
     </body>
     </html>
     """
+    if hasattr(st, "iframe"):
+        try:
+            st.iframe(html, height=iframe_height)
+            return
+        except TypeError:
+            pass
+    import streamlit.components.v1 as components
+
     components.html(html, height=iframe_height, scrolling=False)
 
 
@@ -1258,13 +1281,13 @@ def main():
                 '<div class="canvas-card-header"><span>ORIGINAL FRAME</span><span class="canvas-badge">INPUT</span></div>',
                 unsafe_allow_html=True,
             )
-            st.image(orig_rgb, use_container_width=True)
+            safe_st_image(orig_rgb, "Original input frame")
         with c2:
             st.markdown(
                 f'<div class="canvas-card-header"><span>COMPOSITING RESULT</span><span class="canvas-badge">{mode} · {style_choice}</span></div>',
                 unsafe_allow_html=True,
             )
-            st.image(result_rgb, use_container_width=True)
+            safe_st_image(result_rgb, f"Compositing result for {mode} with {style_choice}")
 
     with tab_diag:
         heatmap_bgr = cv2.applyColorMap((prob_map * 255).astype(np.uint8), cv2.COLORMAP_INFERNO)
@@ -1282,26 +1305,26 @@ def main():
                 '<div class="canvas-card-header"><span>PROBABILITY MAP</span><span class="canvas-badge">RAW U-NET</span></div>',
                 unsafe_allow_html=True,
             )
-            st.image(heatmap_rgb, use_container_width=True)
+            safe_st_image(heatmap_rgb, "Raw U-Net probability heatmap")
         with d2:
             st.markdown(
                 '<div class="canvas-card-header"><span>ALPHA MATTE</span><span class="canvas-badge">REFINED</span></div>',
                 unsafe_allow_html=True,
             )
-            st.image(matte_rgb, use_container_width=True)
+            safe_st_image(matte_rgb, "Refined alpha matte")
         with d3:
             st.markdown(
                 '<div class="canvas-card-header"><span>SILHOUETTE OVERLAY</span><span class="canvas-badge">COMPOSITE</span></div>',
                 unsafe_allow_html=True,
             )
-            st.image(overlay_rgb, use_container_width=True)
+            safe_st_image(overlay_rgb, "Silhouette overlay composite")
 
     with tab_gallery:
         if mode == "Segmentation":
             st.info("Switch Compositing Mode to StyleOnMask, StyleOnBG, or Style to generate a 4-style contact sheet.")
         else:
             st.caption(f"Render all four pretrained neural styles simultaneously under **{MODE_CATALOG[mode]['label']}**.")
-            if st.button("Generate 4-Style Contact Sheet", use_container_width=False):
+            if st.button("Generate 4-Style Contact Sheet", width="content"):
                 cols = st.columns(2, gap="medium")
                 for idx, (s_name, s_model) in enumerate(loaded_styles.items()):
                     s_bgr, s_ms = stylize_frame(frame_bgr, s_model, device)
@@ -1313,7 +1336,7 @@ def main():
                             f'<span class="canvas-badge">{s_ms:.0f} ms</span></div>',
                             unsafe_allow_html=True,
                         )
-                        st.image(comp_rgb, use_container_width=True)
+                        safe_st_image(comp_rgb, f"{s_name} stylized output")
 
     # -------------------------------
     # Export Bar
@@ -1327,7 +1350,7 @@ def main():
             data=encode_image_bytes(result_rgb, "PNG"),
             file_name=f"{base_name}_{mode}_{style_choice}.png",
             mime="image/png",
-            use_container_width=True,
+            width="stretch",
         )
     with ex2:
         st.download_button(
@@ -1335,7 +1358,7 @@ def main():
             data=encode_image_bytes(result_rgb, "JPEG"),
             file_name=f"{base_name}_{mode}_{style_choice}.jpg",
             mime="image/jpeg",
-            use_container_width=True,
+            width="stretch",
         )
     with ex3:
         st.download_button(
@@ -1343,7 +1366,7 @@ def main():
             data=encode_image_bytes(orig_rgb, "RGBA_PNG", alpha_1ch=alpha_3ch[:, :, 0]),
             file_name=f"{base_name}_cutout_rgba.png",
             mime="image/png",
-            use_container_width=True,
+            width="stretch",
         )
 
 
